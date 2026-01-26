@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6.0.2
         with:
           # Use release tag for release events, otherwise the provided input tag
           ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
