@@ -84,7 +84,7 @@ function buildZip(files: ZipInput[], password: string | null, encryption: Encryp
     const name = te.encode(file.name);
     const crc = crc32(file.content);
     const compressed = deflateSync(file.content);
-    let data = compressed;
+    let data: Uint8Array = compressed;
     let method = 8;
     let flags = 0;
     let extra = new Uint8Array(0);
