@@ -10,6 +10,7 @@ export const ALL_DOMAINS: HaDomain[] = [
   "datetime",
   "cover",
   "climate",
+  "weather",
   "scene",
   "_unknown",
 ];
@@ -24,6 +25,7 @@ export const LABEL: Record<HaDomain, string> = {
   datetime: "Date & Time",
   cover: "Covers",
   climate: "Climate",
+  weather: "Weather",
   scene: "Scenes",
   _unknown: "Unknown",
 };

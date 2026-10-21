@@ -32,6 +32,7 @@ describe("haEntitiesToYaml with all domains", () => {
       datetimes,
       covers,
       climates: [],
+      weathers: [],
       scenes,
       unknowns,
     });

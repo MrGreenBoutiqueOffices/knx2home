@@ -57,6 +57,7 @@ describe("domain YAML helpers", () => {
         setpoint_shift_mode: "DPT9002",
       },
     ],
+    weathers: [{ name: "Wetterstation", address_temperature: "8/1/1", address_wind_speed: "8/1/2" }],
     unknowns: [{ name: "Reserve", address: "9/9/9" }],
   };
 
@@ -82,6 +83,7 @@ describe("domain YAML helpers", () => {
     expect(parsed.knx.cover).toBeUndefined();
     expect(parsed.knx.scene).toBeUndefined();
     expect(parsed.knx.climate).toBeUndefined();
+    expect(parsed.knx.weather).toBeUndefined();
     expect(parsed.knx._unknown).toBeUndefined();
     // spot-check quoting behavior for address
     expect(yaml).toContain('address: "1/1/1"');
@@ -108,6 +110,13 @@ describe("domain YAML helpers", () => {
     });
     expect(yaml).toContain('target_temperature_state_address: "8/0/2"');
     expect(parsed.knx.switch).toBeUndefined();
+  });
+
+  it("haEntitiesToYamlForDomain emits weather entities", () => {
+    const parsed = YAML.parse(haEntitiesToYamlForDomain(ent, "weather"));
+    expect(parsed.knx.weather).toEqual([
+      { name: "Wetterstation", address_temperature: "8/1/1", address_wind_speed: "8/1/2" },
+    ]);
   });
 
   it("haDomainListToYaml includes sensor types without knx root", () => {

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import { ChevronDown, Lightbulb, ToggleLeft, Gauge, DoorOpen, Clock, Calendar, CalendarClock, Clapperboard, Binary, HelpCircle, Thermometer } from "lucide-react";
+import { ChevronDown, Lightbulb, ToggleLeft, Gauge, DoorOpen, Clock, Calendar, CalendarClock, Clapperboard, Binary, HelpCircle, Thermometer, CloudSun } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 import { Input } from "@/components/ui/input";
@@ -390,6 +390,45 @@ function createColumns(
     ]);
   }
 
+  if (domain === "weather") {
+    const weatherColumn = (
+      id: string,
+      header: string,
+      items: (entity: DomainEntityMap["weather"]) => AddressBadgeProps[]
+    ) =>
+      columns.push({
+        id,
+        header,
+        cell: ({ row }) => (
+          <AddressBadgeList
+            addressIndex={addressIndex}
+            items={items(row.original.base as DomainEntityMap["weather"])}
+          />
+        ),
+      });
+    weatherColumn("weather_climate", "Climate", (e) => [
+      { label: "temp", value: e.address_temperature },
+      { label: "humidity", value: e.address_humidity },
+      { label: "pressure", value: e.address_air_pressure },
+    ]);
+    weatherColumn("weather_brightness", "Brightness", (e) => [
+      { label: "S", value: e.address_brightness_south },
+      { label: "W", value: e.address_brightness_west },
+      { label: "E", value: e.address_brightness_east },
+      { label: "N", value: e.address_brightness_north },
+    ]);
+    weatherColumn("weather_wind", "Wind", (e) => [
+      { label: "speed", value: e.address_wind_speed },
+      { label: "bearing", value: e.address_wind_bearing },
+    ]);
+    weatherColumn("weather_alarms", "Alarms", (e) => [
+      { label: "wind", value: e.address_wind_alarm },
+      { label: "rain", value: e.address_rain_alarm },
+      { label: "frost", value: e.address_frost_alarm },
+      { label: "day/night", value: e.address_day_night },
+    ]);
+  }
+
   if (domain === "switch") {
     columns.push({
       id: "switch_command",
@@ -593,6 +632,7 @@ export function EntitySectionTable({
     datetime: CalendarClock,
     cover: DoorOpen,
     climate: Thermometer,
+    weather: CloudSun,
     scene: Clapperboard,
     _unknown: HelpCircle,
   };
@@ -606,6 +646,7 @@ export function EntitySectionTable({
     datetime: "text-indigo-500",
     cover: "text-orange-500",
     climate: "text-red-500",
+    weather: "text-sky-500",
     scene: "text-violet-500",
     _unknown: "text-gray-500",
   };

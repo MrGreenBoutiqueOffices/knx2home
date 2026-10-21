@@ -121,6 +121,11 @@ export default function KnxUpload() {
         const key = makeEntityKey(domain, entity, index);
         return { key, domain, base: entity, current: applyEntityOverride(domain, key, entity, entityOverrides) };
       }),
+      weathers: baseEntities.weathers.map((entity, index) => {
+        const domain = DOMAIN_BY_COLLECTION.weathers;
+        const key = makeEntityKey(domain, entity, index);
+        return { key, domain, base: entity, current: applyEntityOverride(domain, key, entity, entityOverrides) };
+      }),
       scenes: baseEntities.scenes.map((entity, index) => {
         const domain = DOMAIN_BY_COLLECTION.scenes;
         const key = makeEntityKey(domain, entity, index);
@@ -146,6 +151,7 @@ export default function KnxUpload() {
       datetimes: keyedEntities.datetimes.map((item) => item.current),
       covers: keyedEntities.covers.map((item) => item.current),
       climates: keyedEntities.climates.map((item) => item.current),
+      weathers: keyedEntities.weathers.map((item) => item.current),
       scenes: keyedEntities.scenes.map((item) => item.current),
       unknowns: keyedEntities.unknowns.map((item) => item.current),
     } satisfies Entities;
@@ -192,6 +198,7 @@ export default function KnxUpload() {
           datetime: "DateTimes",
           cover: "Covers",
           climate: "Climate",
+          weather: "Weather",
           scene: "Scenes",
           _unknown: "Unknown",
         };
@@ -476,6 +483,11 @@ export default function KnxUpload() {
                       {summary.counts.climate > 0 && (
                         <DropdownMenuItem onClick={() => handleCopyDomain("climate")}>
                           Climate ({summary.counts.climate})
+                        </DropdownMenuItem>
+                      )}
+                      {summary.counts.weather > 0 && (
+                        <DropdownMenuItem onClick={() => handleCopyDomain("weather")}>
+                          Weather ({summary.counts.weather})
                         </DropdownMenuItem>
                       )}
                       {summary.counts.scene > 0 && (

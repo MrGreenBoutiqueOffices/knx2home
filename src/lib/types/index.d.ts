@@ -362,6 +362,23 @@ export interface UnknownEntity {
   dpt?: string;
 }
 
+export interface HaWeather {
+  name?: string;
+  address_temperature: string;
+  address_brightness_south?: string;
+  address_brightness_west?: string;
+  address_brightness_east?: string;
+  address_brightness_north?: string;
+  address_wind_speed?: string;
+  address_wind_bearing?: string;
+  address_rain_alarm?: string;
+  address_frost_alarm?: string;
+  address_wind_alarm?: string;
+  address_day_night?: string;
+  address_air_pressure?: string;
+  address_humidity?: string;
+}
+
 export type MappedEntity =
   | { domain: "switch"; payload: HaSwitch }
   | { domain: "binary_sensor"; payload: HaBinarySensor }
@@ -373,6 +390,7 @@ export type MappedEntity =
   | { domain: "cover"; payload: HaCover }
   | { domain: "scene"; payload: HaScene }
   | { domain: "climate"; payload: HaClimate }
+  | { domain: "weather"; payload: HaWeather }
   | { domain: "_unknown"; payload: UnknownEntity };
 
 export interface ExportOptions {

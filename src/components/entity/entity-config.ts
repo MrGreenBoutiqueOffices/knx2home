@@ -13,6 +13,7 @@ export const DOMAIN_BY_COLLECTION = {
   datetimes: "datetime",
   covers: "cover",
   climates: "climate",
+  weathers: "weather",
   scenes: "scene",
   unknowns: "_unknown",
 } as const;
@@ -29,6 +30,7 @@ export type DomainEntityMap = {
   datetime: Entities["datetimes"][number];
   cover: Entities["covers"][number];
   climate: Entities["climates"][number];
+  weather: Entities["weathers"][number];
   scene: Entities["scenes"][number];
   _unknown: Entities["unknowns"][number];
 };
@@ -85,6 +87,10 @@ export function entityPrimaryIdentifier<D extends EntityDomain>(
     // the actual temperature GA can be shared by several rooms, the setpoint is unique
     const typed = entity as DomainEntityMap["climate"];
     return typed.target_temperature_state_address ?? typed.temperature_address ?? null;
+  }
+  if (domain === "weather") {
+    const typed = entity as DomainEntityMap["weather"];
+    return typed.address_temperature ?? null;
   }
   if (domain === "scene") {
     const typed = entity as DomainEntityMap["scene"];

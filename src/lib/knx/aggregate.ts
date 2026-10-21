@@ -11,6 +11,7 @@ import {
   HaDateTime,
   HaCover,
   HaClimate,
+  HaWeather,
   UnknownEntity,
 } from "../types";
 import { isLA, guessEntityType } from "./heuristics";
@@ -486,6 +487,14 @@ function pairSwitchStatesFromLinks(
   }
 }
 
+/** Application flags: state objects can be read but not written. */
+function isStateObject(l: KnxLinkInfo): boolean {
+  return l.flags?.WriteFlag === false && (l.flags?.ReadFlag === true || l.flags?.TransmitFlag === true);
+}
+function isCommandObject(l: KnxLinkInfo): boolean {
+  return l.flags?.WriteFlag === true;
+}
+
 /** ====================== CLIMATE AGGREGATE ====================== */
 export interface ClimateAggregate extends HaClimate {
   consumedIds: Set<string>;
@@ -513,21 +522,22 @@ export function buildClimateAggregates(
   if (!comObjectLinks?.length) return [];
   const gaById = new Map(gas.map((g) => [g.id, g] as const));
   const byChannel = new Map<string, KnxLinkInfo[]>();
-  const deviceLevelByDevice = new Map<string, KnxLinkInfo[]>();
+  const byDevice = new Map<string, KnxLinkInfo[]>();
   for (const l of comObjectLinks) {
-    const map = l.channelId ? byChannel : deviceLevelByDevice;
-    const key = l.channelId ?? l.deviceId;
-    if (!key) continue;
-    (map.get(key) ?? map.set(key, []).get(key)!).push(l);
+    if (l.channelId) (byChannel.get(l.channelId) ?? byChannel.set(l.channelId, []).get(l.channelId)!).push(l);
+    if (l.deviceId) (byDevice.get(l.deviceId) ?? byDevice.set(l.deviceId, []).get(l.deviceId)!).push(l);
   }
   const isStatus = (g: GroupAddress) => STATUS_RE.test(g.name ?? "") || /\bstate\b/i.test(g.name ?? "");
 
-  // Shared heat/cool state per device, only if clearly named as status
+  // Shared heat/cool state per device: a read-only 1.100 object, or one clearly named as status
   const heatCoolStateOf = (deviceId?: string): GroupAddress | undefined => {
-    const candidates = (deviceLevelByDevice.get(deviceId ?? "") ?? [])
-      .map((l) => gaById.get(l.gaId))
-      .filter((g): g is GroupAddress => !!g && normalizeDptToHyphen(g.dpt) === "1-100" && isStatus(g));
-    return candidates.length === 1 ? candidates[0] : undefined;
+    const heatCool = (byDevice.get(deviceId ?? "") ?? []).filter(
+      (l) => normalizeDptToHyphen(gaById.get(l.gaId)?.dpt) === "1-100"
+    );
+    let states = heatCool.filter((l) => isStateObject(l));
+    if (!states.length) states = heatCool.filter((l) => isStatus(gaById.get(l.gaId)!));
+    const ids = new Set(states.map((l) => l.gaId));
+    return ids.size === 1 ? gaById.get([...ids][0]) : undefined;
   };
 
   // Splits command / state for DPTs that may occur twice in a channel (shift, modes)
@@ -599,6 +609,155 @@ export function buildClimateAggregates(
     out.push(agg);
   }
   return out;
+}
+
+/** ====================== CHANNEL LIGHT AGGREGATE ====================== */
+const LIGHT_NAME_STRIP_RE = /\b(ein\/aus|an\/aus|on\/off|schalten|switch|switching)\b/gi;
+
+/**
+ * Dimming actuator outputs link switch, on/off state, absolute brightness and brightness state in one
+ * channel (ETS channel or application object text). Push buttons are skipped: their switching object
+ * transmits instead of receiving.
+ */
+export function buildChannelLightAggregates(
+  gas: GroupAddress[],
+  comObjectLinks?: KnxLinkInfo[]
+): LightAggregate[] {
+  if (!comObjectLinks?.length) return [];
+  const gaById = new Map(gas.map((g) => [g.id, g] as const));
+  const byChannel = new Map<string, KnxLinkInfo[]>();
+  for (const l of comObjectLinks) {
+    if (l.channelId) (byChannel.get(l.channelId) ?? byChannel.set(l.channelId, []).get(l.channelId)!).push(l);
+  }
+  const dptOf = (l: KnxLinkInfo) => normalizeDptToHyphen(gaById.get(l.gaId)?.dpt) ?? "";
+  const nameOf = (l: KnxLinkInfo) => gaById.get(l.gaId)?.name ?? "";
+  const isStateLink = (l: KnxLinkInfo) => (l.flags ? isStateObject(l) : RE_STATUS2.test(nameOf(l)));
+  // the first link of a com object is the GA it sends to
+  const isSendingLink = (links: KnxLinkInfo[], l: KnxLinkInfo) => links.find((x) => x.comObjectId === l.comObjectId) === l;
+
+  const out: LightAggregate[] = [];
+  for (const links of byChannel.values()) {
+    const dpts = new Set(links.map(dptOf));
+    // shutter, climate and scene channels also carry 1-bit and percent objects
+    if (["1-7", "1-8", "1-10", "9-1", "18-1"].some((d) => dpts.has(d))) continue;
+    if (links.some((l) => RE_COVER_WORDS.test(nameOf(l)))) continue;
+
+    const brightness = links.filter((l) => dptOf(l) === "5-1");
+    const brightnessCmd = brightness.find((l) => !isStateLink(l));
+    if (!brightnessCmd) continue;
+    const switchCmd = links.find(
+      (l) => dptOf(l) === "1-1" && !isStateLink(l) && l.flags?.TransmitFlag !== true && isSendingLink(links, l)
+    );
+    if (!switchCmd || (switchCmd.flags && !isCommandObject(switchCmd))) continue;
+
+    const switchGa = gaById.get(switchCmd.gaId)!;
+    const name = (switchGa.name ?? "").replace(LIGHT_NAME_STRIP_RE, "").replace(/\s+/g, " ").trim();
+    const agg: LightAggregate = {
+      name: name || switchGa.name || switchGa.address,
+      on_off: switchGa.address,
+      brightness: gaById.get(brightnessCmd.gaId)!.address,
+      consumedIds: new Set([switchCmd.gaId, brightnessCmd.gaId]),
+    };
+    const onOffState = links.find(
+      (l) => dptOf(l).startsWith("1-") && l.gaId !== switchCmd.gaId && isStateLink(l)
+    );
+    if (onOffState) {
+      agg.on_off_state = gaById.get(onOffState.gaId)!.address;
+      agg.consumedIds.add(onOffState.gaId);
+    }
+    const brightnessState = brightness.find((l) => l.gaId !== brightnessCmd.gaId && isStateLink(l));
+    if (brightnessState) {
+      agg.brightness_state = gaById.get(brightnessState.gaId)!.address;
+      agg.consumedIds.add(brightnessState.gaId);
+    }
+    const dimming = links.find((l) => dptOf(l) === "3-7");
+    if (dimming) {
+      agg.dimming = gaById.get(dimming.gaId)!.address;
+      agg.consumedIds.add(dimming.gaId);
+    }
+    out.push(agg);
+  }
+  return out;
+}
+
+/** ====================== WEATHER AGGREGATE ====================== */
+export interface WeatherAggregate extends HaWeather {
+  consumedIds: Set<string>;
+}
+
+const OUTDOOR_TEMP_RE = /(au(ß|ss)en|outdoor|outside)/i;
+const BRIGHTNESS_DIRECTIONS: Array<["south" | "west" | "east" | "north", RegExp]> = [
+  ["south", /(süd|sued|south|zuid)/i],
+  ["west", /west/i],
+  ["east", /(\bost|east|oost)/i],
+  ["north", /(nord|north|noord)/i],
+];
+
+/**
+ * A weather station is a device that links an outdoor temperature (9.001) together with wind speed or
+ * directional brightness. Its GAs stay available as individual sensors.
+ */
+export function buildWeatherAggregates(
+  gas: GroupAddress[],
+  comObjectLinks?: KnxLinkInfo[]
+): WeatherAggregate[] {
+  if (!comObjectLinks?.length) return [];
+  const gaById = new Map(gas.map((g) => [g.id, g] as const));
+  const byDevice = new Map<string, GroupAddress[]>();
+  for (const l of comObjectLinks) {
+    const g = gaById.get(l.gaId);
+    if (!g || !l.deviceId) continue;
+    const list = byDevice.get(l.deviceId) ?? byDevice.set(l.deviceId, []).get(l.deviceId)!;
+    if (!list.includes(g)) list.push(g);
+  }
+
+  const out: WeatherAggregate[] = [];
+  for (const deviceGas of byDevice.values()) {
+    const ofDpt = (...dpts: string[]) =>
+      deviceGas.filter((g) => dpts.includes(normalizeDptToHyphen(g.dpt) ?? ""));
+    const temps = ofDpt("9-1");
+    const temperature =
+      temps.find((g) => OUTDOOR_TEMP_RE.test(g.name ?? "")) ?? (temps.length === 1 ? temps[0] : undefined);
+    if (!temperature) continue;
+    const brightness = ofDpt("9-4");
+    const windSpeed = ofDpt("9-5", "9-28")[0];
+    const directional = BRIGHTNESS_DIRECTIONS.map(
+      ([direction, re]) => [direction, brightness.find((g) => re.test(g.name ?? ""))] as const
+    );
+    if (!windSpeed && !directional.some(([, g]) => g)) continue;
+
+    const bool = ofDpt("1-1", "1-2", "1-5", "1-11", "1-24");
+    const byName = (re: RegExp) => bool.find((g) => re.test(g.name ?? ""))?.address;
+    const agg: WeatherAggregate = {
+      name: "Wetterstation",
+      address_temperature: temperature.address,
+      address_brightness_south: directional[0][1]?.address,
+      address_brightness_west: directional[1][1]?.address,
+      address_brightness_east: directional[2][1]?.address,
+      address_brightness_north: directional[3][1]?.address,
+      address_wind_speed: windSpeed?.address,
+      address_wind_bearing: ofDpt("5-3")[0]?.address,
+      address_rain_alarm: byName(/regen|rain/i),
+      address_frost_alarm: byName(/frost/i),
+      address_wind_alarm: byName(/wind/i),
+      address_day_night: byName(/tag.?nacht|day.?night/i),
+      address_air_pressure: ofDpt("9-6", "14-58")[0]?.address,
+      address_humidity: ofDpt("9-7")[0]?.address,
+      consumedIds: new Set<string>(),
+    };
+    for (const key of Object.keys(agg) as Array<keyof WeatherAggregate>) {
+      if (agg[key] === undefined) delete agg[key];
+    }
+    out.push(agg);
+  }
+  // Other devices (e.g. shutter actuators) also use the outdoor temperature; HA allows one weather
+  // entity per temperature GA, so keep the most complete one
+  const best = new Map<string, WeatherAggregate>();
+  for (const agg of out) {
+    const current = best.get(agg.address_temperature);
+    if (!current || Object.keys(agg).length > Object.keys(current).length) best.set(agg.address_temperature, agg);
+  }
+  return [...best.values()];
 }
 
 export function collectConsumedIds(
@@ -678,6 +837,10 @@ const DPT_TO_HA: Record<string, string> = {
   "12.001": "pulse_4_ucount",
   "12.100": "long_time_period_sec",
   "12.101": "long_time_period_min",
+  // 16.*
+  "16": "string",
+  "16.000": "string",
+  "16.001": "latin_1",
 };
 
 const FALLBACK_PATTERNS = [
@@ -716,6 +879,7 @@ export function dptToSensorType(
   if (norm === "8") return DPT_TO_HA["8"];
   if (norm === "9") return DPT_TO_HA["9"];
   if (norm === "12") return DPT_TO_HA["12"];
+  if (norm === "16") return DPT_TO_HA["16"];
 
   return fallbackTypeFromName(name);
 }
