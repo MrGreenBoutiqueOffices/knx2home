@@ -11,7 +11,7 @@ import {
   haEntitiesToYamlForDomain,
   HaDomain,
 } from "@/lib/knx/export";
-import { useKnxWorker } from "@/hooks/useKnxWorker";
+import { KnxParseError, useKnxWorker } from "@/hooks/useKnxWorker";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -58,6 +58,8 @@ export default function KnxUpload() {
   const { parse, busy, progress, progressInfo, error } = useKnxWorker();
 
   const [file, setFile] = useState<File | null>(null);
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<KnxCatalog | null>(null);
   const [dropReserveFromUnknown, setDropReserveFromUnknown] = useState(true);
   const [dzKey, setDzKey] = useState(0);
@@ -283,8 +285,9 @@ export default function KnxUpload() {
 
   async function handleParse() {
     if (!file || busy) return;
+    setPasswordError(null);
     try {
-      const cat = await parse(file);
+      const cat = await parse(file, password);
       setCatalog(cat);
       setEntityOverrides({});
       setStep(2);
@@ -293,7 +296,18 @@ export default function KnxUpload() {
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not parse the file.";
-      toast.error("Parsing error", { description: msg });
+      const code = e instanceof KnxParseError ? e.code : undefined;
+      if (code === "PASSWORD_REQUIRED" || code === "PASSWORD_INVALID") {
+        const hint =
+          code === "PASSWORD_REQUIRED"
+            ? "This project is password protected. Enter the project password and parse again."
+            : "The password is not correct. Please try again.";
+        setPasswordError(hint);
+        toast.error(code === "PASSWORD_REQUIRED" ? "Password required" : "Invalid password", { description: hint });
+        document.getElementById("opt-password")?.focus();
+      } else {
+        toast.error("Parsing error", { description: msg });
+      }
       setCatalog(null);
       setEntityOverrides({});
     }
@@ -301,6 +315,8 @@ export default function KnxUpload() {
 
   function handleReset() {
     setFile(null);
+    setPassword("");
+    setPasswordError(null);
     setCatalog(null);
     setDzKey((k) => k + 1);
     setEntityOverrides({});
@@ -354,7 +370,14 @@ export default function KnxUpload() {
           <Section title="Upload" description="Upload and parse your .knxproj">
             <div className="space-y-4">
               <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-[2fr_1fr]">
-                <UploadDropzone key={dzKey} onSelect={setFile} className="h-full" />
+                <UploadDropzone
+                  key={dzKey}
+                  onSelect={(f) => {
+                    setFile(f);
+                    setPasswordError(null);
+                  }}
+                  className="h-full"
+                />
                 <div className="flex h-full flex-col gap-4 rounded-2xl border border-border/60 bg-card/80 p-4 shadow-sm sm:p-5">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-foreground">Parser & options</p>
@@ -365,6 +388,12 @@ export default function KnxUpload() {
                     busy={busy}
                     dropReserveFromUnknown={dropReserveFromUnknown}
                     onToggleReserve={setDropReserveFromUnknown}
+                    password={password}
+                    onPasswordChange={(v) => {
+                      setPassword(v);
+                      setPasswordError(null);
+                    }}
+                    passwordError={passwordError}
                     onParse={handleParse}
                     onReset={handleReset}
                   />
