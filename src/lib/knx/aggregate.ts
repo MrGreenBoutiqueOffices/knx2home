@@ -760,6 +760,72 @@ export function buildWeatherAggregates(
   return [...best.values()];
 }
 
+/** ====================== CHANNEL COVER AGGREGATE ====================== */
+const COVER_NAME_STRIP_RE =
+  /(auf\s*\/\s*ab|hoch\s*\/\s*runter|up\s*\/\s*down|\bstopp?\b|\bauf\b|\bab\b)/gi;
+const SLATS_RE = /(slat|lamell|angle|winkel)/i;
+
+/**
+ * Shutter/blind actuator channels: the application object DPT (not the GA DPT, which is often 1.008
+ * for every shutter GA) tells up/down (1.008), step/stop (1.007), stop (1.017) and position (5.001).
+ */
+export function buildChannelCoverAggregates(
+  gas: GroupAddress[],
+  comObjectLinks?: KnxLinkInfo[]
+): CoverAggregate[] {
+  if (!comObjectLinks?.length) return [];
+  const gaById = new Map(gas.map((g) => [g.id, g] as const));
+  const byChannel = new Map<string, KnxLinkInfo[]>();
+  for (const l of comObjectLinks) {
+    if (l.channelId) (byChannel.get(l.channelId) ?? byChannel.set(l.channelId, []).get(l.channelId)!).push(l);
+  }
+  const objectDpt = (l: KnxLinkInfo) => normalizeDptToHyphen(l.dpt ?? gaById.get(l.gaId)?.dpt) ?? "";
+  // only the sending (first) link of an object is its own GA; further links are listen addresses
+  const sendingLinks = (links: KnxLinkInfo[]) =>
+    links.filter((l) => links.find((x) => x.comObjectId === l.comObjectId) === l);
+
+  const out: CoverAggregate[] = [];
+  for (const channelLinks of byChannel.values()) {
+    const links = sendingLinks(channelLinks);
+    // push buttons transmit their up/down/stop objects; actuator command objects only receive
+    const commands = links.filter((l) => !isStateObject(l) && l.flags?.TransmitFlag !== true);
+    const states = links.filter((l) => isStateObject(l));
+    const isSlats = (l: KnxLinkInfo) => SLATS_RE.test(l.comObject ?? "");
+    const moveLong = commands.find((l) => objectDpt(l) === "1-8" && !/reference/i.test(l.comObject ?? ""));
+    const position = commands.find((l) => objectDpt(l) === "5-1" && !isSlats(l));
+    if (!moveLong && !position) continue;
+    // dimmer channels also have 5.001 objects: require an up/down, step/stop or stop object
+    if (!commands.some((l) => ["1-7", "1-8", "1-17"].includes(objectDpt(l)))) continue;
+
+    const addressOf = (l?: KnxLinkInfo) => (l ? gaById.get(l.gaId)?.address : undefined);
+    const main = gaById.get((moveLong ?? position)!.gaId)!;
+    const name = (main.name ?? "").replace(COVER_NAME_STRIP_RE, "").replace(/\s+/g, " ").trim();
+    const agg: CoverAggregate = { name: name || main.name || main.address, consumedIds: new Set<string>() };
+    const use = (l: KnxLinkInfo | undefined, key: keyof CoverAggregate) => {
+      const address = addressOf(l);
+      if (!l || !address) return;
+      (agg as unknown as Record<string, string>)[key] = address;
+      agg.consumedIds.add(l.gaId);
+    };
+    use(moveLong, "move_long_address");
+    use(commands.find((l) => objectDpt(l) === "1-7"), "move_short_address");
+    use(commands.find((l) => objectDpt(l) === "1-17"), "stop_address");
+    use(position, "position_address");
+    use(states.find((l) => objectDpt(l) === "5-1" && !isSlats(l)), "position_state_address");
+    use(commands.find((l) => objectDpt(l) === "5-1" && isSlats(l)), "angle_address");
+    use(states.find((l) => objectDpt(l) === "5-1" && isSlats(l)), "angle_state_address");
+    out.push(agg);
+  }
+  // one GA can drive several motor channels; keep a single, most complete cover per GA set
+  const byMain = new Map<string, CoverAggregate>();
+  for (const agg of out) {
+    const key = agg.move_long_address ?? agg.position_address!;
+    const current = byMain.get(key);
+    if (!current || Object.keys(agg).length > Object.keys(current).length) byMain.set(key, agg);
+  }
+  return [...byMain.values()];
+}
+
 export function collectConsumedIds(
   ...aggs: Array<{ consumedIds: Set<string> }[]>
 ): Set<string> {
@@ -890,9 +956,9 @@ const RE_COVER_WORDS =
 const RE_STATUS2 = /\b(status|state|feedback|actual|istwert)\b/i; // GA hints that carry feedback/state values
 const RE_POS = /\b(pos(ition)?|positie|stand)\b/i; // GA names indicating slat/cover position
 const RE_ANGLE = /\b(angle|tilt|lamel|hoek)\b/i; // GA names indicating slat tilt/angle control
-const RE_STOP = /\bstop\b/i; // GA names for stop commands on the cover actuator
+const RE_STOP = /\bstopp?\b/i; // GA names for stop commands on the cover actuator
 const RE_SHORT = /\b(short|step|stap|kort)\b/i; // GA names signalling short/stepwise movement
-const RE_LONG = /\b(long|lang|up\/?down|omhoog|omlaag|open|close|sluit)\b/i; // GA names signalling long/continuous movement
+const RE_LONG = /\b(long|lang|up\/?down|omhoog|omlaag|open|close|sluit|auf\s*\/\s*ab|hoch\s*\/\s*runter)\b/i; // GA names signalling long/continuous movement
 const RE_INVERT = /\b(invert|omgekeerd|inverse)\b/i; // GA names signalling direction inversion
 
 function coverBaseName(name?: string): string {
@@ -995,7 +1061,7 @@ export function buildCoverAggregates(
 
   groups.forEach((group) => {
     const agg: CoverAggregate = {
-      name: group.name,
+      name: group.name.replace(/\s*(auf\s*\/\s*ab|hoch\s*\/\s*runter)\s*$/i, "") || group.name,
       consumedIds: new Set<string>(),
     };
 
@@ -1013,7 +1079,11 @@ export function buildCoverAggregates(
       } = entry;
 
       if (isCommand) {
-        if (dpt === "1-8" || (dpt === "1-10" && !isStop)) {
+        // ETS projects often type the stop GA as 1.008 like the up/down GA
+        if (isStop && (dpt === "1-8" || dpt === "1-17")) {
+          if (!agg.stop_address) agg.stop_address = ga.address;
+          agg.consumedIds.add(ga.id);
+        } else if (dpt === "1-8" || (dpt === "1-10" && !isStop)) {
           if (!agg.move_long_address) agg.move_long_address = ga.address;
           agg.consumedIds.add(ga.id);
         } else if (dpt === "1-7") {

@@ -26,6 +26,7 @@ import {
   buildCoverAggregates,
   buildClimateAggregates,
   buildChannelLightAggregates,
+  buildChannelCoverAggregates,
   buildWeatherAggregates,
   collectConsumedIds,
   mapSingleGaToEntity,
@@ -200,7 +201,16 @@ export function buildHaEntities(
       switches.push(entry);
   }
 
-  const coverAggs = buildCoverAggregates((catalog as LegacyCatalog).group_addresses ?? [], linksByGa);
+  // actuator channel covers first; name based covers only for GAs they did not use
+  const channelCoverAggs = buildChannelCoverAggregates((catalog as LegacyCatalog).group_addresses ?? [], comObjectLinks);
+  const channelCoverIds = new Set(channelCoverAggs.flatMap((c) => [...c.consumedIds]));
+  const coverAggs = [
+    ...channelCoverAggs,
+    ...buildCoverAggregates(
+      ((catalog as LegacyCatalog).group_addresses ?? []).filter((g) => !channelCoverIds.has(g.id)),
+      linksByGa
+    ),
+  ];
   for (const c of coverAggs) {
     const entry: HaCover = { name: c.name };
     if (c.move_long_address) entry.move_long_address = c.move_long_address;

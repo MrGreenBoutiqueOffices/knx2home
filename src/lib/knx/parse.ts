@@ -1308,7 +1308,8 @@ function applicationDefinition(
   // M-0083_H-250-1_HP-001B-22-AEFA -> M-0083_A-001B-22-AEFA
   const match = program.match(/^(M-[^_]+)_H-.*_HP-(.+)$/);
   if (!match) return undefined;
-  return state.comObjectDefinitions.get(`${match[1]}_A-${match[2]}_${refId.replace(/_R-[^_]+$/, "")}`);
+  const objectRef = refId.replace(/_R-[^_]+$/, "").replace(/^(MD-[^_]+)_M-[^_]+_MI-[^_]+_/, "$1_");
+  return state.comObjectDefinitions.get(`${match[1]}_A-${match[2]}_${objectRef}`);
 }
 
 /** Read/write/transmit/update flags of the application com object ("Enabled" / "Disabled"). */
@@ -1362,6 +1363,9 @@ function resolvePendingLinks(state: ParseState) {
     const definition = applicationDefinition(state, pending);
     if (!pending.channelId) pending.channelId = channelFromApplication(state, pending, definition);
     const flags = definitionFlags(definition);
+    // the object DPT/function tells apart e.g. shutter stop (1.017) from up/down (1.008) GAs
+    const objectDpt = normalizeDatapoint(definition?.attrs["DatapointType"]).canonical;
+    const objectFunction = definition?.attrs["FunctionText"] || undefined;
     for (const ref of pending.refs) {
       const gaId = resolve(ref);
       if (!gaId) {
@@ -1391,6 +1395,8 @@ function resolvePendingLinks(state: ParseState) {
         role: binding.role,
         origin: "links",
         flags,
+        dpt: objectDpt,
+        comObject: objectFunction,
         source: pending.source,
         attributes: pending.attributes,
         stack: pending.stack,
