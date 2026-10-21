@@ -107,9 +107,13 @@ export function buildHaEntities(
   const scenes: HaScene[] = [];
 
   // Optional: use link contexts to improve pairing
-  const linksByGa = (catalog as KnxCatalog).links && (catalog as KnxCatalog).links!.length
-    ? new Map<string, KnxLinkInfo>((catalog as KnxCatalog).links!.map((l) => [l.gaId, l]))
+  const allLinks = (catalog as KnxCatalog).links ?? [];
+  // ETS5/6 `Links` attributes only feed the switch state pairing below
+  const refLinks = allLinks.filter((l) => l.origin !== "links");
+  const linksByGa = refLinks.length
+    ? new Map<string, KnxLinkInfo>(refLinks.map((l) => [l.gaId, l]))
     : undefined;
+  const comObjectLinks = allLinks.filter((l) => l.origin === "links");
 
   // Collect light aggregates from multiple strategies
   const linkedAggs = buildLinkedLightAggregates(
@@ -168,7 +172,7 @@ export function buildHaEntities(
 
   const laAggs = dedupedLightAggs;  // For consumed tracking
 
-  const switchAggs = buildSwitchAggregates((catalog as LegacyCatalog).group_addresses ?? [], linksByGa);
+  const switchAggs = buildSwitchAggregates((catalog as LegacyCatalog).group_addresses ?? [], linksByGa, comObjectLinks);
   for (const s of switchAggs) {
     const entry: HaSwitch = { name: s.name, address: s.address! };
     if (s.state_address) entry.state_address = s.state_address;
