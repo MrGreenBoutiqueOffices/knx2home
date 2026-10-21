@@ -311,7 +311,8 @@ export interface SwitchAggregate {
 
 export function buildSwitchAggregates(
   gas: GroupAddress[],
-  linksByGa?: Map<string, KnxLinkInfo>
+  linksByGa?: Map<string, KnxLinkInfo>,
+  comObjectLinks?: KnxLinkInfo[]
 ): SwitchAggregate[] {
   const byBase = new Map<string, SwitchAggregate>();
 
@@ -348,6 +349,8 @@ export function buildSwitchAggregates(
     }
   }
   const result = Array.from(byBase.values()).filter((a) => !!a.address);
+
+  if (comObjectLinks?.length) pairSwitchStatesFromLinks(result, gas, comObjectLinks);
 
   if (!linksByGa) return result;
 
@@ -398,6 +401,88 @@ export function buildSwitchAggregates(
   }
 
   return result;
+}
+
+/**
+ * Uses ETS5/6 com object links to find the state GA of a switch:
+ *  1. a com object that sends the command (first link) and listens to a state GA (e.g. a push button)
+ *  2. another com object in the same actuator channel, if the channel has only one switching object
+ * Only GAs with DPT 1.011 or a status-like name qualify as state.
+ */
+function pairSwitchStatesFromLinks(
+  switches: SwitchAggregate[],
+  gas: GroupAddress[],
+  links: KnxLinkInfo[]
+) {
+  const gaById = new Map(gas.map((g) => [g.id, g] as const));
+  const gaIdByAddress = new Map(gas.map((g) => [g.address, g.id] as const));
+  const push = (map: Map<string, KnxLinkInfo[]>, key: string, l: KnxLinkInfo) =>
+    (map.get(key) ?? map.set(key, []).get(key)!).push(l);
+  // links are emitted in attribute order, so the first link per com object is its sending GA
+  const byComObject = new Map<string, KnxLinkInfo[]>();
+  const byChannel = new Map<string, KnxLinkInfo[]>();
+  const byGa = new Map<string, KnxLinkInfo[]>();
+  for (const l of links) {
+    if (l.comObjectId) push(byComObject, l.comObjectId, l);
+    if (l.channelId) push(byChannel, l.channelId, l);
+    push(byGa, l.gaId, l);
+  }
+  const commandIds = new Set(
+    switches.map((s) => (s.address ? gaIdByAddress.get(s.address) : undefined)).filter(Boolean)
+  );
+  const isStateGa = (gaId: string): GroupAddress | undefined => {
+    const g = gaById.get(gaId);
+    if (!g || commandIds.has(gaId)) return undefined;
+    const dpt = normalizeDptToHyphen(g.dpt);
+    if (dpt === "1-11") return g;
+    if (dpt?.startsWith("1-") && (isStatusName(g.name) || /\bstate\b/i.test(g.name ?? ""))) return g;
+    return undefined;
+  };
+
+  for (const agg of switches) {
+    if (agg.state_address || !agg.address) continue;
+    const cmdId = gaIdByAddress.get(agg.address);
+    if (!cmdId) continue;
+    const cmdLinks = byGa.get(cmdId) ?? [];
+
+    // Only objects that send the command; listening objects (e.g. central off) are skipped
+    const sendingLinks = cmdLinks.filter(
+      (l) => byComObject.get(l.comObjectId ?? "")?.[0]?.gaId === cmdId
+    );
+
+    let chosen: GroupAddress | undefined;
+    for (const cmdLink of sendingLinks) {
+      const objectLinks = byComObject.get(cmdLink.comObjectId ?? "") ?? [];
+      for (const l of objectLinks.slice(1)) {
+        chosen = isStateGa(l.gaId);
+        if (chosen) break;
+      }
+      if (chosen) break;
+    }
+
+    if (!chosen) {
+      for (const cmdLink of sendingLinks) {
+        if (!cmdLink.channelId) continue;
+        const channelLinks = byChannel.get(cmdLink.channelId) ?? [];
+        const switchingObjects = new Set(
+          channelLinks.filter((l) => commandIds.has(l.gaId)).map((l) => l.comObjectId)
+        );
+        // e.g. shutter channels with wind alarm and enable objects: ambiguous
+        if (switchingObjects.size !== 1) continue;
+        for (const l of channelLinks) {
+          if (l.comObjectId === cmdLink.comObjectId) continue;
+          chosen = isStateGa(l.gaId);
+          if (chosen) break;
+        }
+        if (chosen) break;
+      }
+    }
+
+    if (chosen) {
+      agg.state_address = chosen.address;
+      agg.consumedIds.add(chosen.id);
+    }
+  }
 }
 
 export function collectConsumedIds(

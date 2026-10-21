@@ -158,6 +158,8 @@ export interface KnxLinkInfo {
   dpt?: string;
   flags?: Record<string, boolean | string>;
   role?: KnxGroupObjectRole;
+  /** "links" when read from an ETS5/6 `Links` attribute instead of a `GroupAddressRef` element. */
+  origin?: "groupAddressRef" | "links";
   source?: string;
   attributes?: Record<string, string>;
   stack?: KnxStackFrame[];
