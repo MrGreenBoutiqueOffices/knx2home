@@ -7,7 +7,17 @@ import { ParseProgress } from "@/lib/types/parse";
 type WorkerResponse =
   | { t: "progress"; p: ParseProgress }
   | { t: "result"; catalog: KnxCatalog }
-  | { t: "error"; message: string };
+  | { t: "error"; message: string; code?: string };
+
+/** Error thrown by `parse`; `code` is set for password problems. */
+export class KnxParseError extends Error {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "KnxParseError";
+    this.code = code;
+  }
+}
 
 export function useKnxWorker() {
   const [busy, setBusy] = useState(false);
@@ -53,7 +63,7 @@ export function useKnxWorker() {
       if (data.t === "error") {
         setError(data.message);
         setBusy(false);
-        const err = new Error(data.message);
+        const err = new KnxParseError(data.message, data.code);
         pending?.reject(err);
         return;
       }
@@ -91,7 +101,7 @@ export function useKnxWorker() {
   }, []);
 
   const parse = useCallback(
-    async (file: File): Promise<KnxCatalog> => {
+    async (file: File, password?: string): Promise<KnxCatalog> => {
       if (!workerRef.current) throw new Error("Parser worker is not ready.");
       if (pendingRef.current) throw new Error("Parser is already working.");
 
@@ -103,7 +113,7 @@ export function useKnxWorker() {
       return new Promise<KnxCatalog>((resolve, reject) => {
         pendingRef.current = { resolve, reject };
         try {
-          workerRef.current?.postMessage({ t: "parse", file });
+          workerRef.current?.postMessage({ t: "parse", file, password: password || undefined });
         } catch (err) {
           pendingRef.current = null;
           const message =
