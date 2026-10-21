@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import { ChevronDown, Lightbulb, ToggleLeft, Gauge, DoorOpen, Clock, Calendar, CalendarClock, Clapperboard, Binary, HelpCircle } from "lucide-react";
+import { ChevronDown, Lightbulb, ToggleLeft, Gauge, DoorOpen, Clock, Calendar, CalendarClock, Clapperboard, Binary, HelpCircle, Thermometer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 import { Input } from "@/components/ui/input";
@@ -344,6 +344,52 @@ function createColumns(
     });
   }
 
+  if (domain === "climate") {
+    const climateColumn = (
+      id: string,
+      header: string,
+      hint: string,
+      items: (entity: DomainEntityMap["climate"]) => AddressBadgeProps[]
+    ) =>
+      columns.push({
+        id,
+        header: () => (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-help">{header}</span>
+            </TooltipTrigger>
+            <TooltipContent>{hint}</TooltipContent>
+          </Tooltip>
+        ),
+        cell: ({ row }) => (
+          <AddressBadgeList
+            addressIndex={addressIndex}
+            items={items(row.original.base as DomainEntityMap["climate"])}
+          />
+        ),
+      });
+    climateColumn("climate_temperature", "Temperature", "Actual temperature and setpoint state.", (e) => [
+      { label: "actual", value: e.temperature_address },
+      { label: "target", value: e.target_temperature_state_address },
+      { label: "humidity", value: e.humidity_state_address },
+    ]);
+    climateColumn("climate_shift", "Setpoint shift", "Command/state group addresses for the setpoint shift.", (e) => [
+      { label: "cmd", value: e.setpoint_shift_address },
+      { label: "state", value: e.setpoint_shift_state_address },
+    ]);
+    climateColumn("climate_mode", "Mode", "HVAC operation mode (DPT 20.102) and controller mode (DPT 20.105).", (e) => [
+      { label: "op", value: e.operation_mode_address },
+      { label: "op state", value: e.operation_mode_state_address },
+      { label: "ctrl", value: e.controller_mode_address },
+      { label: "ctrl state", value: e.controller_mode_state_address },
+    ]);
+    climateColumn("climate_activity", "Activity", "Valve/heating activity, command value and heat/cool state.", (e) => [
+      { label: "active", value: e.active_state_address },
+      { label: "value", value: e.command_value_state_address },
+      { label: "heat/cool", value: e.heat_cool_state_address },
+    ]);
+  }
+
   if (domain === "switch") {
     columns.push({
       id: "switch_command",
@@ -546,6 +592,7 @@ export function EntitySectionTable({
     date: Calendar,
     datetime: CalendarClock,
     cover: DoorOpen,
+    climate: Thermometer,
     scene: Clapperboard,
     _unknown: HelpCircle,
   };
@@ -558,6 +605,7 @@ export function EntitySectionTable({
     date: "text-pink-500",
     datetime: "text-indigo-500",
     cover: "text-orange-500",
+    climate: "text-red-500",
     scene: "text-violet-500",
     _unknown: "text-gray-500",
   };

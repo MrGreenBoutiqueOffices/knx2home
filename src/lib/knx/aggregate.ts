@@ -10,6 +10,7 @@ import {
   HaDate,
   HaDateTime,
   HaCover,
+  HaClimate,
   UnknownEntity,
 } from "../types";
 import { isLA, guessEntityType } from "./heuristics";
@@ -483,6 +484,121 @@ function pairSwitchStatesFromLinks(
       agg.consumedIds.add(chosen.id);
     }
   }
+}
+
+/** ====================== CLIMATE AGGREGATE ====================== */
+export interface ClimateAggregate extends HaClimate {
+  consumedIds: Set<string>;
+}
+
+const TARGET_TEMP_RE = /\b(soll|sollwert|setpoint|target|basissollwert)\b/i;
+const CLIMATE_NAME_STRIP_RE =
+  /\b(soll|sollwert|basissollwert|setpoint|target|ist|istwert|actual|temperatur|temperature)\b/gi;
+
+function climateName(ga?: GroupAddress): string | undefined {
+  if (!ga?.name) return undefined;
+  const stripped = ga.name.replace(CLIMATE_NAME_STRIP_RE, "").replace(/\s+/g, " ").trim();
+  return stripped || ga.name;
+}
+
+/**
+ * Builds climate entities from ETS5/6 com object links: room controller / heating actuator
+ * channels link actual temperature, setpoint, setpoint shift, HVAC mode etc. in one channel.
+ * A channel qualifies when it has an actual temperature and a setpoint (both DPT 9.001).
+ */
+export function buildClimateAggregates(
+  gas: GroupAddress[],
+  comObjectLinks?: KnxLinkInfo[]
+): ClimateAggregate[] {
+  if (!comObjectLinks?.length) return [];
+  const gaById = new Map(gas.map((g) => [g.id, g] as const));
+  const byChannel = new Map<string, KnxLinkInfo[]>();
+  const deviceLevelByDevice = new Map<string, KnxLinkInfo[]>();
+  for (const l of comObjectLinks) {
+    const map = l.channelId ? byChannel : deviceLevelByDevice;
+    const key = l.channelId ?? l.deviceId;
+    if (!key) continue;
+    (map.get(key) ?? map.set(key, []).get(key)!).push(l);
+  }
+  const isStatus = (g: GroupAddress) => STATUS_RE.test(g.name ?? "") || /\bstate\b/i.test(g.name ?? "");
+
+  // Shared heat/cool state per device, only if clearly named as status
+  const heatCoolStateOf = (deviceId?: string): GroupAddress | undefined => {
+    const candidates = (deviceLevelByDevice.get(deviceId ?? "") ?? [])
+      .map((l) => gaById.get(l.gaId))
+      .filter((g): g is GroupAddress => !!g && normalizeDptToHyphen(g.dpt) === "1-100" && isStatus(g));
+    return candidates.length === 1 ? candidates[0] : undefined;
+  };
+
+  // Splits command / state for DPTs that may occur twice in a channel (shift, modes)
+  const commandAndState = (list: GroupAddress[]) => {
+    if (list.length === 1) return { state: list[0] };
+    const state = list.find(isStatus);
+    const command = list.find((g) => g !== state);
+    return { command, state };
+  };
+
+  const out: ClimateAggregate[] = [];
+  for (const links of byChannel.values()) {
+    const seen = new Set<string>();
+    const byDpt = new Map<string, GroupAddress[]>();
+    for (const l of links) {
+      const g = gaById.get(l.gaId);
+      if (!g || seen.has(g.id)) continue;
+      seen.add(g.id);
+      const dpt = normalizeDptToHyphen(g.dpt);
+      if (!dpt) continue;
+      (byDpt.get(dpt) ?? byDpt.set(dpt, []).get(dpt)!).push(g);
+    }
+
+    const temps = byDpt.get("9-1") ?? [];
+    const target = temps.find((g) => TARGET_TEMP_RE.test(g.name ?? ""));
+    const actual = temps.find((g) => g !== target && !TARGET_TEMP_RE.test(g.name ?? ""));
+    if (!actual || !target) continue;
+
+    const agg: ClimateAggregate = {
+      name: climateName(target) ?? climateName(actual),
+      temperature_address: actual.address,
+      target_temperature_state_address: target.address,
+      consumedIds: new Set([target.id]),
+    };
+    const use = (g: GroupAddress | undefined, apply: (address: string) => void) => {
+      if (!g) return;
+      apply(g.address);
+      agg.consumedIds.add(g.id);
+    };
+
+    const shift9 = byDpt.get("9-2") ?? [];
+    const shift6 = byDpt.get("6-10") ?? [];
+    const shift = shift9.length ? shift9 : shift6;
+    if (shift.length) {
+      const { command, state } = commandAndState(shift);
+      // HA needs the shift command to change the setpoint; a lone state GA is used as both
+      use(command ?? state, (a) => (agg.setpoint_shift_address = a));
+      use(state, (a) => (agg.setpoint_shift_state_address = a));
+      agg.setpoint_shift_mode = shift9.length ? "DPT9002" : "DPT6010";
+    }
+
+    const opModes = commandAndState(byDpt.get("20-102") ?? []);
+    use(opModes.command, (a) => (agg.operation_mode_address = a));
+    use(opModes.state, (a) => (agg.operation_mode_state_address = a));
+
+    const ctrlModes = commandAndState(byDpt.get("20-105") ?? []);
+    use(ctrlModes.command, (a) => (agg.controller_mode_address = a));
+    use(ctrlModes.state, (a) => (agg.controller_mode_state_address = a));
+
+    use((byDpt.get("1-11") ?? [])[0], (a) => (agg.active_state_address = a));
+    use((byDpt.get("5-1") ?? [])[0], (a) => (agg.command_value_state_address = a));
+
+    // Shared GAs (temperature, humidity, heat/cool) stay available as their own entities
+    const humidity = (byDpt.get("9-7") ?? [])[0];
+    if (humidity) agg.humidity_state_address = humidity.address;
+    const heatCool = heatCoolStateOf(links[0]?.deviceId);
+    if (heatCool) agg.heat_cool_state_address = heatCool.address;
+
+    out.push(agg);
+  }
+  return out;
 }
 
 export function collectConsumedIds(

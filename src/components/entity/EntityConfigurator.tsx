@@ -25,6 +25,7 @@ interface EntityConfiguratorProps {
 
 const SECTION_LABEL: Record<keyof KeyedEntities, string> = {
   covers: "Covers",
+  climates: "Climate",
   switches: "Switches",
   binarySensors: "Binary sensors",
   lights: "Lights",
