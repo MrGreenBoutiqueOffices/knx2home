@@ -338,10 +338,45 @@ export interface HaScene {
   scene_number?: number;
 }
 
+export interface HaClimate {
+  name?: string;
+  temperature_address: string;
+  target_temperature_address?: string;
+  target_temperature_state_address: string;
+  setpoint_shift_address?: string;
+  setpoint_shift_state_address?: string;
+  setpoint_shift_mode?: "DPT6010" | "DPT9002";
+  operation_mode_address?: string;
+  operation_mode_state_address?: string;
+  controller_mode_address?: string;
+  controller_mode_state_address?: string;
+  heat_cool_state_address?: string;
+  active_state_address?: string;
+  command_value_state_address?: string;
+  humidity_state_address?: string;
+}
+
 export interface UnknownEntity {
   name: string;
   address: string;
   dpt?: string;
+}
+
+export interface HaWeather {
+  name?: string;
+  address_temperature: string;
+  address_brightness_south?: string;
+  address_brightness_west?: string;
+  address_brightness_east?: string;
+  address_brightness_north?: string;
+  address_wind_speed?: string;
+  address_wind_bearing?: string;
+  address_rain_alarm?: string;
+  address_frost_alarm?: string;
+  address_wind_alarm?: string;
+  address_day_night?: string;
+  address_air_pressure?: string;
+  address_humidity?: string;
 }
 
 export type MappedEntity =
@@ -354,6 +389,8 @@ export type MappedEntity =
   | { domain: "datetime"; payload: HaDateTime }
   | { domain: "cover"; payload: HaCover }
   | { domain: "scene"; payload: HaScene }
+  | { domain: "climate"; payload: HaClimate }
+  | { domain: "weather"; payload: HaWeather }
   | { domain: "_unknown"; payload: UnknownEntity };
 
 export interface ExportOptions {

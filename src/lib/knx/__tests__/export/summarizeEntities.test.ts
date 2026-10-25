@@ -19,6 +19,8 @@ describe("summarizeEntities", () => {
       dates: [],
       datetimes: [],
       covers: [{ move_long_address: "4/0/1" }],
+      climates: [{ temperature_address: "6/0/1", target_temperature_state_address: "6/0/2" }],
+      weathers: [{ address_temperature: "7/0/1" }],
       scenes: [{ address: "5/0/1", scene_number: 1 }],
       unknowns: [{ name: "Other", address: "9/9/9" }],
     };
@@ -30,8 +32,10 @@ describe("summarizeEntities", () => {
     expect(summary.counts.sensor).toBe(3);
     expect(summary.counts.cover).toBe(1);
     expect(summary.counts.scene).toBe(1);
+    expect(summary.counts.climate).toBe(1);
+    expect(summary.counts.weather).toBe(1);
     expect(summary.counts._unknown).toBe(1);
-    expect(summary.counts.total).toBe(10);
+    expect(summary.counts.total).toBe(12);
 
     expect(summary.sensorsByType).toEqual({ temperature: 2, humidity: 1 });
   });

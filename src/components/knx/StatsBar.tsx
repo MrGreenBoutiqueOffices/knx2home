@@ -14,6 +14,8 @@ import {
   Clapperboard,
   Binary,
   HelpCircle,
+  Thermometer,
+  CloudSun,
 } from "lucide-react";
 
 const DOMAIN_ICONS = {
@@ -25,6 +27,8 @@ const DOMAIN_ICONS = {
   date: Calendar,
   datetime: CalendarClock,
   cover: DoorOpen,
+  climate: Thermometer,
+  weather: CloudSun,
   scene: Clapperboard,
   _unknown: HelpCircle,
 };
@@ -38,6 +42,8 @@ const DOMAIN_COLORS = {
   date: "text-pink-500",
   datetime: "text-indigo-500",
   cover: "text-orange-500",
+  climate: "text-red-500",
+  weather: "text-sky-500",
   scene: "text-violet-500",
   _unknown: "text-gray-500",
 };

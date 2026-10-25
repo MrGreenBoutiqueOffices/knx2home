@@ -61,6 +61,8 @@ export default function ExportWizard({
         date: entities.dates.length,
         datetime: entities.datetimes.length,
         cover: entities.covers.length,
+        climate: entities.climates.length,
+        weather: entities.weathers.length,
         scene: entities.scenes.length,
         _unknown: entities.unknowns.length,
       } as Record<HaDomain, number>),
@@ -119,6 +121,8 @@ export default function ExportWizard({
         dates: [],
         datetimes: [],
         covers: [],
+        climates: [],
+        weathers: [],
         scenes: [],
         unknowns: [],
       };
@@ -132,6 +136,8 @@ export default function ExportWizard({
         else if (d === "date") empty.dates = entities.dates;
         else if (d === "datetime") empty.datetimes = entities.datetimes;
         else if (d === "cover") empty.covers = entities.covers;
+        else if (d === "climate") empty.climates = entities.climates;
+        else if (d === "weather") empty.weathers = entities.weathers;
         else if (d === "scene") empty.scenes = entities.scenes;
         else if (d === "_unknown") empty.unknowns = entities.unknowns;
       }

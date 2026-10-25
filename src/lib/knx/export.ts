@@ -10,6 +10,8 @@ import {
   HaDate,
   HaDateTime,
   HaCover,
+  HaClimate,
+  HaWeather,
   UnknownEntity,
   KnxFlags,
   KnxGroupLevel,
@@ -22,6 +24,10 @@ import {
   buildNameBasedLightAggregates,
   buildSwitchAggregates,
   buildCoverAggregates,
+  buildClimateAggregates,
+  buildChannelLightAggregates,
+  buildChannelCoverAggregates,
+  buildWeatherAggregates,
   collectConsumedIds,
   mapSingleGaToEntity,
 } from "./aggregate";
@@ -37,6 +43,8 @@ export interface HaEntities {
   dates: HaDate[];
   datetimes: HaDateTime[];
   covers: HaCover[];
+  climates: HaClimate[];
+  weathers: HaWeather[];
   unknowns: UnknownEntity[];
   scenes: HaScene[];
 }
@@ -66,6 +74,8 @@ export function buildHaEntities(
       dates: [],
       datetimes: [],
       covers: [],
+      climates: [],
+      weathers: [],
       unknowns: [],
       scenes: [],
     };
@@ -79,6 +89,8 @@ export function buildHaEntities(
       else if (m.domain === "datetime") ent.datetimes.push(m.payload);
       else if (m.domain === "cover") ent.covers.push(m.payload);
       else if (m.domain === "scene") ent.scenes.push(m.payload);
+      else if (m.domain === "climate") ent.climates.push(m.payload);
+      else if (m.domain === "weather") ent.weathers.push(m.payload);
       else if (m.domain === "_unknown") ent.unknowns.push(m.payload);
     }
     const total =
@@ -91,6 +103,8 @@ export function buildHaEntities(
       ent.datetimes.length +
       ent.covers.length +
       ent.scenes.length +
+      ent.climates.length +
+      ent.weathers.length +
       ent.unknowns.length;
     if (total > 0) return ent;
   }
@@ -103,6 +117,8 @@ export function buildHaEntities(
   const dates: HaDate[] = [];
   const datetimes: HaDateTime[] = [];
   const covers: HaCover[] = [];
+  const climates: HaClimate[] = [];
+  const weathers: HaWeather[] = [];
   const unknowns: UnknownEntity[] = [];
   const scenes: HaScene[] = [];
 
@@ -123,9 +139,10 @@ export function buildHaEntities(
   const addressAggs = buildAddressLightAggregates((catalog as LegacyCatalog).group_addresses ?? []);
   const laPatternAggs = buildLaLightAggregates((catalog as LegacyCatalog).group_addresses ?? []);
   const nameBasedAggs = buildNameBasedLightAggregates((catalog as LegacyCatalog).group_addresses ?? []);
+  const channelLightAggs = buildChannelLightAggregates((catalog as LegacyCatalog).group_addresses ?? [], comObjectLinks);
 
   // Combine and deduplicate all light aggregates
-  const allLightAggs = [...linkedAggs, ...addressAggs, ...laPatternAggs, ...nameBasedAggs];
+  const allLightAggs = [...channelLightAggs, ...linkedAggs, ...addressAggs, ...laPatternAggs, ...nameBasedAggs];
 
   // Deduplicate: keep aggregate with most fields for each unique address
   const dedupedLightAggs = (() => {
@@ -173,7 +190,10 @@ export function buildHaEntities(
   const laAggs = dedupedLightAggs;  // For consumed tracking
 
   const switchAggs = buildSwitchAggregates((catalog as LegacyCatalog).group_addresses ?? [], linksByGa, comObjectLinks);
+  // switch outputs of dimming actuators are exported as lights
+  const lightAddresses = new Set(channelLightAggs.map((a) => a.on_off).filter(Boolean));
   for (const s of switchAggs) {
+    if (s.address && lightAddresses.has(s.address)) continue;
     const entry: HaSwitch = { name: s.name, address: s.address! };
     if (s.state_address) entry.state_address = s.state_address;
     else entry.respond_to_read = true;
@@ -181,7 +201,16 @@ export function buildHaEntities(
       switches.push(entry);
   }
 
-  const coverAggs = buildCoverAggregates((catalog as LegacyCatalog).group_addresses ?? [], linksByGa);
+  // actuator channel covers first; name based covers only for GAs they did not use
+  const channelCoverAggs = buildChannelCoverAggregates((catalog as LegacyCatalog).group_addresses ?? [], comObjectLinks);
+  const channelCoverIds = new Set(channelCoverAggs.flatMap((c) => [...c.consumedIds]));
+  const coverAggs = [
+    ...channelCoverAggs,
+    ...buildCoverAggregates(
+      ((catalog as LegacyCatalog).group_addresses ?? []).filter((g) => !channelCoverIds.has(g.id)),
+      linksByGa
+    ),
+  ];
   for (const c of coverAggs) {
     const entry: HaCover = { name: c.name };
     if (c.move_long_address) entry.move_long_address = c.move_long_address;
@@ -199,7 +228,16 @@ export function buildHaEntities(
       covers.push(entry);
   }
 
-  const consumed = collectConsumedIds(laAggs, switchAggs, coverAggs);
+  const climateAggs = buildClimateAggregates((catalog as LegacyCatalog).group_addresses ?? [], comObjectLinks);
+  for (const { consumedIds: _consumed, ...climate } of climateAggs) {
+    if (!(dropReserve && (climate.name ?? "").trim().toLowerCase() === "reserve"))
+      climates.push(climate);
+  }
+
+  const weatherAggs = buildWeatherAggregates((catalog as LegacyCatalog).group_addresses ?? [], comObjectLinks);
+  for (const { consumedIds: _consumed, ...weather } of weatherAggs) weathers.push(weather);
+
+  const consumed = collectConsumedIds(laAggs, switchAggs, coverAggs, climateAggs);
 
   // Track consumed addresses (not just IDs) to prevent duplicates
   const consumedAddresses = new Set<string>();
@@ -281,6 +319,8 @@ export function buildHaEntities(
     dates,
     datetimes,
     covers,
+    climates,
+    weathers,
     scenes,
     unknowns: finalUnknowns,
   };
@@ -338,6 +378,8 @@ function entitiesToYaml(doc: Document.Parsed, ent: HaEntities): YAMLMap {
     knx.set("datetime", domainListToYaml(doc, ent.datetimes));
   if (ent.covers.length) knx.set("cover", domainListToYaml(doc, ent.covers));
   if (ent.scenes.length) knx.set("scene", domainListToYaml(doc, ent.scenes));
+  if (ent.climates?.length) knx.set("climate", domainListToYaml(doc, ent.climates));
+  if (ent.weathers?.length) knx.set("weather", domainListToYaml(doc, ent.weathers));
   if (ent.unknowns.length)
     knx.set("_unknown", domainListToYaml(doc, ent.unknowns));
 
@@ -369,6 +411,8 @@ export type HaDomain =
   | "datetime"
   | "cover"
   | "scene"
+  | "climate"
+  | "weather"
   | "_unknown";
 
 /**
@@ -386,6 +430,8 @@ export function pickEntitiesDomain(ent: HaEntities, domain: HaDomain): HaEntitie
     datetimes: domain === "datetime" ? ent.datetimes : [],
     covers: domain === "cover" ? ent.covers : [],
     scenes: domain === "scene" ? ent.scenes : [],
+    climates: domain === "climate" ? ent.climates ?? [] : [],
+    weathers: domain === "weather" ? ent.weathers ?? [] : [],
     unknowns: domain === "_unknown" ? ent.unknowns : [],
   };
 }
@@ -414,6 +460,8 @@ export function haDomainListToYaml(ent: HaEntities, domain: HaDomain): string {
   else if (domain === "datetime") list = ent.datetimes;
   else if (domain === "cover") list = ent.covers;
   else if (domain === "scene") list = ent.scenes;
+  else if (domain === "climate") list = ent.climates ?? [];
+  else if (domain === "weather") list = ent.weathers ?? [];
   else if (domain === "_unknown") list = ent.unknowns;
 
   // Reuse domainListToYaml for consistent quoting/formatting
@@ -624,6 +672,8 @@ export interface EntitySummary {
     datetime: number;
     cover: number;
     scene: number;
+    climate: number;
+    weather: number;
     _unknown: number;
     total: number;
   };
@@ -641,6 +691,8 @@ export function summarizeEntities(ent: HaEntities): EntitySummary {
     datetime: ent.datetimes.length,
     cover: ent.covers.length,
     scene: ent.scenes.length,
+    climate: ent.climates?.length ?? 0,
+    weather: ent.weathers?.length ?? 0,
     _unknown: ent.unknowns.length,
     total:
       ent.switches.length +
@@ -652,6 +704,8 @@ export function summarizeEntities(ent: HaEntities): EntitySummary {
       ent.datetimes.length +
       ent.covers.length +
       ent.scenes.length +
+      (ent.climates?.length ?? 0) +
+      (ent.weathers?.length ?? 0) +
       ent.unknowns.length,
   };
 
