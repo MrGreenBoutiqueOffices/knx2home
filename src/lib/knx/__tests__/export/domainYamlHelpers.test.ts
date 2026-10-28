@@ -48,6 +48,16 @@ describe("domain YAML helpers", () => {
       },
     ],
     scenes: [{ name: "Scene", address: "7/0/1", scene_number: 2 }],
+    climates: [
+      {
+        name: "Bad oben",
+        temperature_address: "8/0/1",
+        target_temperature_state_address: "8/0/2",
+        setpoint_shift_address: "8/0/3",
+        setpoint_shift_mode: "DPT9002",
+      },
+    ],
+    weathers: [{ name: "Wetterstation", address_temperature: "8/1/1", address_wind_speed: "8/1/2" }],
     unknowns: [{ name: "Reserve", address: "9/9/9" }],
   };
 
@@ -60,6 +70,7 @@ describe("domain YAML helpers", () => {
     const onlyUnknown = pickEntitiesDomain(ent, "_unknown");
     expect(onlyUnknown.unknowns).toHaveLength(1);
     expect(onlyUnknown.scenes).toHaveLength(0);
+    expect(onlyUnknown.climates).toHaveLength(0);
   });
 
   it("haEntitiesToYamlForDomain emits knx root with single section", () => {
@@ -71,6 +82,8 @@ describe("domain YAML helpers", () => {
     expect(parsed.knx.sensor).toBeUndefined();
     expect(parsed.knx.cover).toBeUndefined();
     expect(parsed.knx.scene).toBeUndefined();
+    expect(parsed.knx.climate).toBeUndefined();
+    expect(parsed.knx.weather).toBeUndefined();
     expect(parsed.knx._unknown).toBeUndefined();
     // spot-check quoting behavior for address
     expect(yaml).toContain('address: "1/1/1"');
@@ -83,6 +96,27 @@ describe("domain YAML helpers", () => {
     expect(arr[0].position_state_address).toBe("6/0/5");
     // Ensure addresses are quoted in list outputs too
     expect(listYaml).toContain('position_address: "6/0/4"');
+  });
+
+  it("haEntitiesToYamlForDomain emits climate entities with quoted addresses", () => {
+    const yaml = haEntitiesToYamlForDomain(ent, "climate");
+    const parsed = YAML.parse(yaml);
+    expect(parsed.knx.climate[0]).toEqual({
+      name: "Bad oben",
+      temperature_address: "8/0/1",
+      target_temperature_state_address: "8/0/2",
+      setpoint_shift_address: "8/0/3",
+      setpoint_shift_mode: "DPT9002",
+    });
+    expect(yaml).toContain('target_temperature_state_address: "8/0/2"');
+    expect(parsed.knx.switch).toBeUndefined();
+  });
+
+  it("haEntitiesToYamlForDomain emits weather entities", () => {
+    const parsed = YAML.parse(haEntitiesToYamlForDomain(ent, "weather"));
+    expect(parsed.knx.weather).toEqual([
+      { name: "Wetterstation", address_temperature: "8/1/1", address_wind_speed: "8/1/2" },
+    ]);
   });
 
   it("haDomainListToYaml includes sensor types without knx root", () => {

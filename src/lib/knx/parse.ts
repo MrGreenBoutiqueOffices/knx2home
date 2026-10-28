@@ -186,8 +186,20 @@ interface ParseState {
   groupAddresses: Map<KnxId, PartialGroupAddress>;
   bindings: PartialGroupAddressBinding[];
   linkInfos: KnxLinkInfo[];
+  /** ETS5/6 `Links="GA-1 GA-2"` attributes, resolved once all group addresses are known. */
+  pendingLinks: PendingComObjectLinks[];
   parsingNotes: string[];
   secureHints: Set<string>;
+}
+
+interface PendingComObjectLinks {
+  refs: string[];
+  comObjectId: KnxId;
+  channelId?: KnxId;
+  deviceId?: KnxId;
+  source: string;
+  attributes: Record<string, string>;
+  stack: KnxStackFrame[];
 }
 
 const SCAN_RANGE: [number, number] = [0, 20];
@@ -861,7 +873,15 @@ function collectComObjects(
   }
 
   if (tagEndsWith(tag, "ComObjectInstanceRef")) {
-    const id = attrs["Id"] || attrs["ID"] || attrs["RefId"];
+    const device = stack
+      .slice()
+      .reverse()
+      .find((item) => tagEndsWith(item.tag, "DeviceInstance"));
+    const deviceId = device ? device.attrs["Id"] || device.attrs["ID"] : undefined;
+    // ETS5/6 only store a RefId that repeats across devices with the same application, so scope it per device.
+    const explicitId = attrs["Id"] || attrs["ID"];
+    const refId = attrs["RefId"];
+    const id = explicitId || (refId && deviceId ? `${deviceId}_${refId}` : refId);
     if (!id) return;
     const comObject = ensureMapEntry(state.comObjects, id, () => ({
       id,
@@ -909,14 +929,35 @@ function collectComObjects(
         }));
         ch.comObjectIds.add(id);
       }
+    } else if (attrs["ChannelId"] && deviceId) {
+      // ETS6 references the application channel by a device-local ChannelId attribute.
+      const channelId = `${deviceId}_${attrs["ChannelId"]}`;
+      comObject.channelId = comObject.channelId || channelId;
+      const ch = ensureMapEntry(state.channels, channelId, () => ({
+        id: channelId,
+        name: undefined,
+        description: undefined,
+        number: undefined,
+        comObjectIds: new Set<KnxId>(),
+        attrs: { ChannelId: attrs["ChannelId"] },
+      }));
+      ch.comObjectIds.add(id);
     }
 
-    const device = stack
-      .slice()
-      .reverse()
-      .find((item) => tagEndsWith(item.tag, "DeviceInstance"));
+    const links = (attrs["Links"] || "").split(/\s+/).filter(Boolean);
+    if (links.length) {
+      state.pendingLinks.push({
+        refs: links,
+        comObjectId: id,
+        channelId: comObject.channelId,
+        deviceId,
+        source: filename,
+        attributes: { ...attrs },
+        stack: snapshotStack(stack),
+      });
+    }
+
     if (device) {
-      const deviceId = device.attrs["Id"] || device.attrs["ID"];
       if (deviceId) {
         comObject.deviceId = comObject.deviceId || deviceId;
         const dev = ensureMapEntry(state.devices, deviceId, () => ({
@@ -1231,6 +1272,139 @@ function assembleComObject(state: ParseState, partial: PartialComObjectInstance)
   return comObject;
 }
 
+const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+function decodeXmlAttribute(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, e: string) =>
+    e[0] === "#"
+      ? String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10))
+      : XML_ENTITIES[e.toLowerCase()]
+  );
+}
+
+/** Extracts `<ComObject>` definitions from an application program without parsing the whole file. */
+function collectApplicationComObjects(state: ParseState, filename: string, xml: string) {
+  const tagRe = /<ComObject\s([^>]*?)\/?>/g;
+  const attrRe = /([\w:.-]+)="([^"]*)"/g;
+  for (let m = tagRe.exec(xml); m; m = tagRe.exec(xml)) {
+    const attrs: Record<string, string> = {};
+    for (let a = attrRe.exec(m[1]); a; a = attrRe.exec(m[1])) attrs[a[1]] = decodeXmlAttribute(a[2]);
+    collectComObjects(state, filename, "ComObject", attrs, []);
+  }
+}
+
+/**
+ * Applications without ETS channels group their com objects by the object text of the
+ * application program (e.g. "Channel D" for switch, dimming and state objects of one dimmer output).
+ */
+function applicationDefinition(
+  state: ParseState,
+  pending: PendingComObjectLinks
+): PartialComObjectDefinition | undefined {
+  const refId = pending.attributes["RefId"];
+  const device = pending.deviceId ? state.devices.get(pending.deviceId) : undefined;
+  const program = device?.attrs?.["Hardware2ProgramRefId"];
+  if (!refId || !program) return undefined;
+  // M-0083_H-250-1_HP-001B-22-AEFA -> M-0083_A-001B-22-AEFA
+  const match = program.match(/^(M-[^_]+)_H-.*_HP-(.+)$/);
+  if (!match) return undefined;
+  const objectRef = refId.replace(/_R-[^_]+$/, "").replace(/^(MD-[^_]+)_M-[^_]+_MI-[^_]+_/, "$1_");
+  return state.comObjectDefinitions.get(`${match[1]}_A-${match[2]}_${objectRef}`);
+}
+
+/** Read/write/transmit/update flags of the application com object ("Enabled" / "Disabled"). */
+function definitionFlags(definition?: PartialComObjectDefinition): Record<string, boolean> | undefined {
+  if (!definition) return undefined;
+  const flags: Record<string, boolean> = {};
+  for (const key of ["ReadFlag", "WriteFlag", "TransmitFlag", "UpdateFlag"]) {
+    const value = definition.attrs[key];
+    if (value !== undefined) flags[key] = value === "Enabled";
+  }
+  return Object.keys(flags).length ? flags : undefined;
+}
+
+function channelFromApplication(
+  state: ParseState,
+  pending: PendingComObjectLinks,
+  definition?: PartialComObjectDefinition
+): KnxId | undefined {
+  const device = pending.deviceId ? state.devices.get(pending.deviceId) : undefined;
+  const text = definition?.attrs["Text"]?.trim();
+  if (!device || !text) return undefined;
+
+  const channelId = `${device.id}_text:${text}`;
+  const ch = ensureMapEntry(state.channels, channelId, () => ({
+    id: channelId,
+    name: text,
+    description: undefined,
+    number: undefined,
+    comObjectIds: new Set<KnxId>(),
+    attrs: { Text: text },
+  }));
+  ch.comObjectIds.add(pending.comObjectId);
+  device.channelIds.add(channelId);
+  const comObject = state.comObjects.get(pending.comObjectId);
+  if (comObject && !comObject.channelId) comObject.channelId = channelId;
+  return channelId;
+}
+
+function resolvePendingLinks(state: ParseState) {
+  if (!state.pendingLinks.length) return;
+  // Links use the short form ("GA-24") of the group address id ("P-03BE-0_GA-24").
+  const byShortId = new Map<string, KnxId | null>();
+  for (const gaId of state.groupAddresses.keys()) {
+    const short = gaId.slice(gaId.lastIndexOf("_") + 1);
+    byShortId.set(short, byShortId.has(short) ? null : gaId);
+  }
+  const resolve = (ref: string): KnxId | undefined =>
+    state.groupAddresses.has(ref) ? ref : byShortId.get(ref) ?? undefined;
+
+  for (const pending of state.pendingLinks) {
+    const definition = applicationDefinition(state, pending);
+    if (!pending.channelId) pending.channelId = channelFromApplication(state, pending, definition);
+    const flags = definitionFlags(definition);
+    // the object DPT/function tells apart e.g. shutter stop (1.017) from up/down (1.008) GAs
+    const objectDpt = normalizeDatapoint(definition?.attrs["DatapointType"]).canonical;
+    const objectFunction = definition?.attrs["FunctionText"] || undefined;
+    for (const ref of pending.refs) {
+      const gaId = resolve(ref);
+      if (!gaId) {
+        state.parsingNotes.push(`Unresolved group address link ${ref} on ${pending.comObjectId}`);
+        continue;
+      }
+      const binding: PartialGroupAddressBinding = {
+        id: `${pending.source}#${state.bindings.length}`,
+        role: "unknown",
+        groupAddressId: gaId,
+        groupAddressRef: ref,
+        comObjectId: pending.comObjectId,
+        channelId: pending.channelId,
+        deviceId: pending.deviceId,
+        source: pending.source,
+        attributes: pending.attributes,
+        stack: pending.stack,
+      };
+      state.bindings.push(binding);
+      state.linkInfos.push({
+        gaId,
+        comObjectId: pending.comObjectId,
+        channelId: pending.channelId,
+        deviceId: pending.deviceId,
+        // Group by channel so status and command objects of one actuator channel end up together.
+        context: pending.channelId ?? pending.comObjectId,
+        role: binding.role,
+        origin: "links",
+        flags,
+        dpt: objectDpt,
+        comObject: objectFunction,
+        source: pending.source,
+        attributes: pending.attributes,
+        stack: pending.stack,
+      });
+    }
+  }
+}
+
 function attachBindingsToComObjects(state: ParseState) {
   for (const binding of state.bindings) {
     if (!binding.comObjectId) continue;
@@ -1521,6 +1695,7 @@ export async function parseKnxproj(
     groupAddresses: new Map(),
     bindings: [],
     linkInfos: [],
+    pendingLinks: [],
     parsingNotes: [],
     secureHints: new Set(),
   };
@@ -1540,6 +1715,10 @@ export async function parseKnxproj(
       headText.indexOf("Project") !== -1;
 
     if (!hasRelevant) {
+      // Application programs are large; only their com object definitions are needed
+      if (headText.indexOf("<ApplicationProgram ") !== -1) {
+        collectApplicationComObjects(state, name, decoder.decode(raw));
+      }
       emit("parse_xml", rangePercent(FILE_RANGE, (i + 1) / totalFiles), { filename: name, filePercent: 100 });
       if ((i % yieldEveryFiles) === yieldEveryFiles - 1) {
         await new Promise((resolve) => setTimeout(resolve, yieldDelayMs));
@@ -1566,6 +1745,7 @@ export async function parseKnxproj(
     xml = "";
   }
 
+  resolvePendingLinks(state);
   attachBindingsToComObjects(state);
 
   const buildSteps = state.groupAddresses.size + state.devices.size + state.bindings.length + 1;
