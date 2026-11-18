@@ -14,6 +14,8 @@ This project is a **Next.js application** that converts KNX configuration files 
   Combines related entities into logical sets (e.g., covers with state and position).
 - 🎨 **Customizable Entities**<br>
   Allows manual adjustments and overrides for entity types and names.
+- 🔐 **Password Protected Projects**<br>
+  Enter the ETS project password to parse protected exports (ETS4/5 ZipCrypto and ETS6 AES). Decryption runs locally in your browser; the password is never uploaded.
 - 🌍 **Next.js Frontend**<br>
   Web interface for uploading, previewing, and exporting configurations.
 - 🔁 **Export/Import Configuration**<br>

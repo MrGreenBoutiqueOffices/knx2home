@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { ParseProgress } from "../types/parse";
 import { decodeGaIntToTriple } from "./utils";
+import { extractProtectedProject } from "./zipDecrypt";
 
 /** ====================== GENERAL HELPERS ====================== */
 
@@ -1463,6 +1464,8 @@ export async function parseKnxproj(
     preScanBytes?: number;
     yieldEveryFiles?: number;
     yieldDelayMs?: number;
+    /** Project password for password protected ETS exports. */
+    password?: string;
   }
 ): Promise<KnxCatalog> {
   const onProgress = opts?.onProgress;
@@ -1484,6 +1487,7 @@ export async function parseKnxproj(
   emit("scan_entries", rangePercent(SCAN_RANGE, 0.1));
 
   const knxprojEntries: string[] = [];
+  const isProtectedProjectArchive = (name: string) => /^P-[^/\\]+\.zip$/i.test(name);
   const entries: Record<string, Uint8Array> = await new Promise((resolve, reject) => {
     unzip(
       new Uint8Array(buffer),
@@ -1491,7 +1495,7 @@ export async function parseKnxproj(
         filter: (f) => {
           const name = f.name || "";
           if (/\.knxproj$/i.test(name)) knxprojEntries.push(name);
-          return /\.xml$/i.test(name);
+          return /\.xml$/i.test(name) || isProtectedProjectArchive(name);
         },
       },
       (err, out) => {
@@ -1500,6 +1504,17 @@ export async function parseKnxproj(
       }
     );
   });
+
+  // Password protected exports contain the project folder as an encrypted P-XXXX.zip.
+  for (const archiveName of Object.keys(entries).filter(isProtectedProjectArchive)) {
+    const archive = entries[archiveName];
+    delete entries[archiveName];
+    const projectFolder = archiveName.replace(/\.zip$/i, "");
+    const inner = await extractProtectedProject(archive, opts?.password, (name) => /\.xml$/i.test(name));
+    for (const [innerName, data] of Object.entries(inner)) {
+      entries[`${projectFolder}/${innerName}`] = data;
+    }
+  }
 
   const xmlNames = Object.keys(entries).filter((name) => name.toLowerCase().endsWith(".xml"));
   const totalFiles = xmlNames.length || 1;
