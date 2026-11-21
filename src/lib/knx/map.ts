@@ -222,6 +222,8 @@ export function buildEntitiesFromCatalog(catalog: KnxCatalog): MappedEntity[] {
       case "datetime": return `dt|${m.payload.address}`;
       case "cover": return `co|${JSON.stringify(m.payload)}`;
       case "scene": return `sc|${m.payload.address}|${m.payload.scene_number ?? ''}`;
+      case "climate": return `cl|${m.payload.target_temperature_state_address}`;
+      case "weather": return `we|${m.payload.address_temperature}`;
       case "_unknown": return `un|${m.payload.address}|${m.payload.dpt ?? ''}`;
     }
   };

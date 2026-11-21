@@ -110,6 +110,8 @@ export function guessEntityType(dpt: string | undefined, name: string, address?:
       return "sensor";
     }
     if (nd === "12-1" || nd.startsWith("12-")) return "sensor";
+    // Character strings (DPT 16) are read-only text sensors
+    if (nd === "16" || nd.startsWith("16-")) return "sensor";
 
     // Cover DPTs
     if (nd === "1-7" || nd === "1-8" || nd === "1-10") return "cover";
